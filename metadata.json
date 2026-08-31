@@ -1,0 +1,6 @@
+{
+  "name": "J.A.R.V.I.S.",
+  "description": "Autonomous Android AI OS Assistant with Multi-AI routing (Gemini, Groq, OpenRouter), local 'Hey JARVIS' wake word detection, Gemini Live bidirectional voice, and autonomous system automation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

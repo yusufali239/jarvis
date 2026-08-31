@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">J.A.R.V.I.S.</string>
+    <string name="accessibility_service_description">J.A.R.V.I.S. uses Accessibility Service strictly with your permission to read on-screen UI elements, tap buttons, scroll, and type text autonomously when you issue voice or text commands.</string>
+    <string name="jarvis_notification_listener_description">Enables J.A.R.V.I.S. to read incoming notifications and summarize critical alerts on demand.</string>
+</resources>
