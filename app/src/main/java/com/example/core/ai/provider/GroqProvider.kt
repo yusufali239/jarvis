@@ -80,7 +80,47 @@ class GroqProvider : AIProvider {
         )
     )
 
-    override suspend fun getAvailableModels(): List<AIModelInfo> = availableModels
+    override suspend fun getAvailableModels(): List<AIModelInfo> = withContext(Dispatchers.IO) {
+        val apiKey = SecretProvider.groqApiKey
+        if (apiKey.isNotBlank()) {
+            try {
+                val request = Request.Builder()
+                    .url("https://api.groq.com/openai/v1/models")
+                    .addHeader("Authorization", "Bearer $apiKey")
+                    .get()
+                    .build()
+                val response = client.newCall(request).execute()
+                if (response.isSuccessful) {
+                    val body = response.body?.string().orEmpty()
+                    val data = JSONObject(body).optJSONArray("data")
+                    if (data != null && data.length() > 0) {
+                        val dynamicList = mutableListOf<AIModelInfo>()
+                        for (i in 0 until data.length()) {
+                            val obj = data.getJSONObject(i)
+                            val id = obj.optString("id")
+                            if (id.isNotBlank() && !id.contains("whisper", ignoreCase = true) && !id.contains("tts", ignoreCase = true)) {
+                                dynamicList.add(
+                                    AIModelInfo(
+                                        id = id,
+                                        name = id,
+                                        provider = AIProviderType.GROQ,
+                                        contextWindow = "Groq LPU",
+                                        capabilities = setOf(AICapability.TEXT, AICapability.TOOL_CALLING, AICapability.STREAMING),
+                                        isRecommended = id == "llama-3.3-70b-versatile",
+                                        description = "Active Groq LPU model: $id"
+                                    )
+                                )
+                            }
+                        }
+                        if (dynamicList.isNotEmpty()) return@withContext dynamicList
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(tag, "Failed to fetch dynamic Groq models: ${e.message}")
+            }
+        }
+        availableModels
+    }
 
     override suspend fun processTurn(
         conversationHistory: List<GeminiContent>,
@@ -97,150 +137,187 @@ class GroqProvider : AIProvider {
             )
         }
 
-        val effectiveModel = if (modelId.isNotBlank()) modelId else "llama-3.3-70b-versatile"
+        val candidateModels = listOfNotNull(
+            modelId.takeIf { it.isNotBlank() },
+            "llama-3.1-8b-instant",
+            "llama-3.3-70b-versatile",
+            "llama3-70b-8192",
+            "llama3-8b-8192",
+            "mixtral-8x7b-32768",
+            "gemma2-9b-it"
+        ).distinct()
 
-        try {
-            val rootJson = JSONObject()
-            rootJson.put("model", effectiveModel)
-            rootJson.put("temperature", temperature)
+        var lastErrorMsg = "Unknown error"
+        var lastCode = 0
 
-            // Convert conversation history
-            val messagesArray = JSONArray()
+        for (currModel in candidateModels) {
+            try {
+                val rootJson = JSONObject()
+                rootJson.put("model", currModel)
+                rootJson.put("temperature", temperature)
 
-            val effectiveSysPrompt = systemInstruction ?: """
-You are J.A.R.V.I.S., a sophisticated, calm, intellectual, and highly capable Android AI agent.
-Be concise, proactive, confident, and futuristic.
-Never use generic filler phrases like "Sure!" or "Of course!".
-Execute requested Android actions directly using available tools whenever needed.
-            """.trimIndent()
+                // Convert conversation history
+                val messagesArray = JSONArray()
 
-            val systemMsg = JSONObject()
-            systemMsg.put("role", "system")
-            systemMsg.put("content", effectiveSysPrompt)
-            messagesArray.put(systemMsg)
+                val effectiveSysPrompt = systemInstruction ?: """
+SYSTEM INSTRUCTION: Вы — J.A.R.V.I.S., ваш базовый язык — русский. Все ответы должны генерироваться строго на русском языке и быть оптимизированы для естественного чтения движком TTS на русском.
+Вы — интеллектуальный, лаконичный и футуристичный агент операционной системы Android. Выполняйте требуемые системные действия через инструменты Function Calling.
+                """.trimIndent()
 
-            for (content in conversationHistory) {
-                val role = when (content.role) {
-                    "model", "assistant" -> "assistant"
-                    else -> "user"
-                }
+                val systemMsg = JSONObject()
+                systemMsg.put("role", "system")
+                systemMsg.put("content", effectiveSysPrompt)
+                messagesArray.put(systemMsg)
 
-                val textParts = content.parts.mapNotNull { it.text }.joinToString("\n")
-                if (textParts.isNotBlank()) {
-                    val msgObj = JSONObject()
-                    msgObj.put("role", role)
-                    msgObj.put("content", textParts)
-                    messagesArray.put(msgObj)
-                }
-
-                // Check function responses
-                for (part in content.parts) {
-                    if (part.functionResponse != null) {
-                        val toolResponseObj = JSONObject()
-                        toolResponseObj.put("role", "tool")
-                        toolResponseObj.put("name", part.functionResponse.name)
-                        toolResponseObj.put("content", JSONObject(part.functionResponse.response).toString())
-                        messagesArray.put(toolResponseObj)
+                for (content in conversationHistory) {
+                    val role = when (content.role) {
+                        "model", "assistant" -> "assistant"
+                        else -> "user"
                     }
-                }
-            }
-            rootJson.put("messages", messagesArray)
 
-            // Convert tools if supported
-            if (toolsDeclaration != null && supportsCapability(AICapability.TOOL_CALLING, effectiveModel)) {
-                val toolsArray = JSONArray()
-                for (wrapper in toolsDeclaration) {
-                    for (decl in wrapper.functionDeclarations) {
-                        val toolObj = JSONObject()
-                        toolObj.put("type", "function")
+                    val textParts = content.parts?.mapNotNull { it.text }?.joinToString("\n").orEmpty()
+                    if (textParts.isNotBlank()) {
+                        val msgObj = JSONObject()
+                        msgObj.put("role", role)
+                        msgObj.put("content", textParts)
+                        messagesArray.put(msgObj)
+                    }
 
-                        val fnObj = JSONObject()
-                        fnObj.put("name", decl.name)
-                        fnObj.put("description", decl.description)
-
-                        val paramsObj = JSONObject()
-                        paramsObj.put("type", "object")
-
-                        val propsObj = JSONObject()
-                        for ((key, prop) in decl.parameters.properties) {
-                            val p = JSONObject()
-                            p.put("type", prop.type.lowercase())
-                            p.put("description", prop.description)
-                            propsObj.put(key, p)
+                    // Check function responses
+                    for (part in content.parts ?: emptyList()) {
+                        if (part.functionResponse != null) {
+                            val toolResponseObj = JSONObject()
+                            toolResponseObj.put("role", "tool")
+                            toolResponseObj.put("name", part.functionResponse.name)
+                            toolResponseObj.put("content", JSONObject(part.functionResponse.response).toString())
+                            messagesArray.put(toolResponseObj)
                         }
-                        paramsObj.put("properties", propsObj)
-                        paramsObj.put("required", JSONArray(decl.parameters.required))
-
-                        fnObj.put("parameters", paramsObj)
-                        toolObj.put("function", fnObj)
-                        toolsArray.put(toolObj)
                     }
                 }
-                if (toolsArray.length() > 0) {
-                    rootJson.put("tools", toolsArray)
-                    rootJson.put("tool_choice", "auto")
+                rootJson.put("messages", messagesArray)
+
+                // Convert tools if supported
+                if (toolsDeclaration != null && supportsCapability(AICapability.TOOL_CALLING, currModel)) {
+                    val toolsArray = JSONArray()
+                    for (wrapper in toolsDeclaration) {
+                        for (decl in wrapper.functionDeclarations) {
+                            val toolObj = JSONObject()
+                            toolObj.put("type", "function")
+
+                            val fnObj = JSONObject()
+                            fnObj.put("name", decl.name)
+                            fnObj.put("description", decl.description)
+
+                            val paramsObj = JSONObject()
+                            paramsObj.put("type", "object")
+
+                            val propsObj = JSONObject()
+                            for ((key, prop) in decl.parameters.properties) {
+                                val p = JSONObject()
+                                p.put("type", prop.type.lowercase())
+                                p.put("description", prop.description)
+                                propsObj.put(key, p)
+                            }
+                            paramsObj.put("properties", propsObj)
+                            paramsObj.put("required", JSONArray(decl.parameters.required))
+
+                            fnObj.put("parameters", paramsObj)
+                            toolObj.put("function", fnObj)
+                            toolsArray.put(toolObj)
+                        }
+                    }
+                    if (toolsArray.length() > 0) {
+                        rootJson.put("tools", toolsArray)
+                        rootJson.put("tool_choice", "auto")
+                    }
                 }
-            }
 
-            val requestBody = rootJson.toString().toRequestBody("application/json".toMediaType())
-            val request = Request.Builder()
-                .url("https://api.groq.com/openai/v1/chat/completions")
-                .addHeader("Authorization", "Bearer $apiKey")
-                .addHeader("Content-Type", "application/json")
-                .post(requestBody)
-                .build()
+                val requestBody = rootJson.toString().toRequestBody("application/json".toMediaType())
+                val request = Request.Builder()
+                    .url("https://api.groq.com/openai/v1/chat/completions")
+                    .addHeader("Authorization", "Bearer $apiKey")
+                    .addHeader("Content-Type", "application/json")
+                    .post(requestBody)
+                    .build()
 
-            val response = client.newCall(request).execute()
-            val responseBody = response.body?.string() ?: ""
-
-            if (!response.isSuccessful) {
+                val response = client.newCall(request).execute()
+                val responseBody = response.body?.string() ?: ""
                 val code = response.code
-                val errorMsg = try {
-                    JSONObject(responseBody).optJSONObject("error")?.optString("message") ?: "HTTP $code: $responseBody"
-                } catch (e: Exception) {
-                    "HTTP $code error"
+                lastCode = code
+
+                if (!response.isSuccessful) {
+                    val errorMsg = try {
+                        JSONObject(responseBody).optJSONObject("error")?.optString("message") ?: "HTTP $code: $responseBody"
+                    } catch (e: Exception) {
+                        "HTTP $code error"
+                    }
+                    Log.e(tag, "Groq API error on $currModel ($code): $errorMsg")
+                    lastErrorMsg = errorMsg
+
+                    if (code == 404 || errorMsg.contains("does not exist", ignoreCase = true) || errorMsg.contains("do not have access", ignoreCase = true)) {
+                        continue // Attempt next Groq candidate model
+                    }
+
+                    if (code == 429) {
+                        return@withContext GeminiResult.Error(
+                            message = "Groq Rate Limit ($code): $errorMsg",
+                            throwable = RuntimeException("HTTP 429"),
+                            statusCode = 429,
+                            isRateLimit = true
+                        )
+                    }
+
+                    return@withContext GeminiResult.Error(
+                        message = "Groq Error ($code): $errorMsg",
+                        throwable = RuntimeException("HTTP $code: $errorMsg"),
+                        statusCode = code,
+                        isRateLimit = false
+                    )
                 }
-                Log.e(tag, "Groq API error ($code): $errorMsg")
-                return@withContext GeminiResult.Error(
-                    message = "Groq Error ($code): $errorMsg",
-                    throwable = RuntimeException("HTTP $code")
-                )
-            }
 
-            // Parse response
-            val respJson = JSONObject(responseBody)
-            val choices = respJson.optJSONArray("choices")
-            if (choices == null || choices.length() == 0) {
-                return@withContext GeminiResult.Error("Groq returned empty response choices.")
-            }
+                // Parse response
+                val respJson = JSONObject(responseBody)
+                val choices = respJson.optJSONArray("choices")
+                if (choices == null || choices.length() == 0) {
+                    continue
+                }
 
-            val firstChoice = choices.getJSONObject(0)
-            val messageObj = firstChoice.optJSONObject("message")
-            val contentText = messageObj?.optString("content")?.takeIf { it != "null" && it.isNotBlank() }
+                val firstChoice = choices.getJSONObject(0)
+                val messageObj = firstChoice.optJSONObject("message")
+                val contentText = messageObj?.optString("content")?.takeIf { it != "null" && it.isNotBlank() }
 
-            val functionCalls = mutableListOf<GeminiFunctionCall>()
-            val toolCalls = messageObj?.optJSONArray("tool_calls")
-            if (toolCalls != null) {
-                for (i in 0 until toolCalls.length()) {
-                    val tc = toolCalls.getJSONObject(i)
-                    val fn = tc.optJSONObject("function")
-                    if (fn != null) {
-                        val fnName = fn.optString("name")
-                        val fnArgsStr = fn.optString("arguments", "{}")
-                        val argsMap = parseJsonStringToMap(fnArgsStr)
-                        functionCalls.add(GeminiFunctionCall(name = fnName, args = argsMap))
+                val functionCalls = mutableListOf<GeminiFunctionCall>()
+                val toolCalls = messageObj?.optJSONArray("tool_calls")
+                if (toolCalls != null) {
+                    for (i in 0 until toolCalls.length()) {
+                        val tc = toolCalls.getJSONObject(i)
+                        val fn = tc.optJSONObject("function")
+                        if (fn != null) {
+                            val fnName = fn.optString("name")
+                            val fnArgsStr = fn.optString("arguments", "{}")
+                            val argsMap = parseJsonStringToMap(fnArgsStr)
+                            functionCalls.add(GeminiFunctionCall(name = fnName, args = argsMap))
+                        }
                     }
                 }
-            }
 
-            GeminiResult.Success(
-                text = contentText,
-                functionCalls = functionCalls
-            )
-        } catch (e: Exception) {
-            Log.e(tag, "Exception during Groq turn: ${e.message}", e)
-            GeminiResult.Error("Groq failed: ${e.message}", e)
+                return@withContext GeminiResult.Success(
+                    text = contentText,
+                    functionCalls = functionCalls,
+                    respondingProvider = "Groq ($currModel)"
+                )
+            } catch (e: Exception) {
+                Log.e(tag, "Exception during Groq model $currModel: ${e.message}", e)
+                lastErrorMsg = e.localizedMessage ?: "Unknown Groq error"
+            }
         }
+
+        val isRateLimit = lastErrorMsg.contains("429") || lastErrorMsg.contains("quota", ignoreCase = true)
+        GeminiResult.Error(
+            message = "Groq failed: $lastErrorMsg",
+            statusCode = if (isRateLimit) 429 else (if (lastCode != 0) lastCode else null),
+            isRateLimit = isRateLimit
+        )
     }
 
     override fun isConfigured(): Boolean {

@@ -14,7 +14,7 @@ data class GeminiGenerateRequest(
 @JsonClass(generateAdapter = true)
 data class GeminiContent(
     @Json(name = "role") val role: String? = null,
-    @Json(name = "parts") val parts: List<GeminiPart>
+    @Json(name = "parts") val parts: List<GeminiPart>? = null
 )
 
 @JsonClass(generateAdapter = true)

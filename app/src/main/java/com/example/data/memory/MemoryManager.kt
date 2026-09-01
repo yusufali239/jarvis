@@ -87,7 +87,8 @@ class MemoryManager(private val dao: JarvisDao) {
                 audioAvailable = audioAvailable,
                 toolCall = toolCall,
                 thinkingContent = thinkingContent,
-                metadata = metadata
+                metadata = metadata,
+                provider = provider
             )
         )
 

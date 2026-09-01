@@ -16,7 +16,7 @@ data class LiveClientMessage(
 
 @JsonClass(generateAdapter = true)
 data class LiveSetupConfig(
-    @Json(name = "model") val model: String = "models/gemini-2.5-flash-native-audio-preview-12-2025",
+    @Json(name = "model") val model: String = "models/gemini-2.0-flash-exp",
     @Json(name = "generationConfig") val generationConfig: LiveGenerationConfig? = null,
     @Json(name = "systemInstruction") val systemInstruction: GeminiContent? = null,
     @Json(name = "tools") val tools: List<GeminiToolDeclarationWrapper>? = null

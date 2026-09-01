@@ -16,19 +16,28 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BatteryAlert
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DeleteForever
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Hearing
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
@@ -54,7 +63,12 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.android.system.SamsungDeviceSpecs
 import com.example.core.ai.GeminiConfig
+import com.example.core.ai.TtsDiagnosticState
+import com.example.core.ai.TtsEnginePreference
+import com.example.core.ai.TtsLanguagePreference
+import com.example.core.ai.TtsLanguageSupportStatus
 import com.example.core.ai.provider.AICapability
 import com.example.core.ai.provider.AIModelInfo
 import com.example.core.ai.provider.AIProviderType
@@ -81,9 +95,20 @@ fun SettingsScreen(
     selectedModels: Map<AIProviderType, String>,
     isAutoFallbackEnabled: Boolean,
     availableModels: Map<AIProviderType, List<AIModelInfo>>,
+    ttsDiagnosticState: TtsDiagnosticState = TtsDiagnosticState(),
+    samsungSpecs: SamsungDeviceSpecs? = null,
     wakeWordState: WakeWordState,
     isWakeWordEnabled: Boolean,
     isConversationMode: Boolean,
+    diagnosticReport: com.example.core.network.FullDiagnosticsReport? = null,
+    isRunningDiagnostics: Boolean = false,
+    onRunDiagnostics: () -> Unit = {},
+    onSelectTtsEngine: (TtsEnginePreference) -> Unit = {},
+    onSelectTtsLanguage: (TtsLanguagePreference) -> Unit = {},
+    onSelectTtsVoice: (String?) -> Unit = {},
+    onTestRussianVoice: () -> Unit = {},
+    onOpenTtsSettings: () -> Unit = {},
+    onRequestBatteryOptimization: () -> Unit = {},
     onSelectProvider: (AIProviderType) -> Unit,
     onSelectModel: (AIProviderType, String) -> Unit,
     onToggleAutoFallback: (Boolean) -> Unit,
@@ -96,7 +121,7 @@ fun SettingsScreen(
     onToggleConversationMode: (Boolean) -> Unit,
     onPurgeAllData: () -> Unit
 ) {
-    val voices = listOf("Kore", "Aoede", "Puck", "Fenrir", "Charon")
+    val cloudVoices = listOf("Kore", "Aoede", "Puck", "Fenrir", "Charon")
     var apiKeyDialogProvider by remember { mutableStateOf<AIProviderType?>(null) }
     var tempKeyInput by remember { mutableStateOf("") }
 
@@ -121,7 +146,7 @@ fun SettingsScreen(
                 modifier = Modifier.size(24.dp)
             )
             Text(
-                text = "NEURAL CORE & MULTI-AI SETTINGS",
+                text = "SYSTEM SETTINGS & DEVICE OPTIMIZATION",
                 fontSize = 13.sp,
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold,
@@ -130,14 +155,119 @@ fun SettingsScreen(
         }
 
         // ==========================================
-        // 1. "HEY JARVIS" WAKE WORD SYSTEM
+        // 0. PHYSICAL DEVICE & SAMSUNG S21 ULTRA PROFILER
+        // ==========================================
+        samsungSpecs?.let { specs ->
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(JarvisSurface)
+                    .border(
+                        1.dp,
+                        if (specs.isS21Ultra) JarvisCyanGlow else JarvisBorder,
+                        RoundedCornerShape(12.dp)
+                    )
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PhoneAndroid,
+                            contentDescription = null,
+                            tint = if (specs.isS21Ultra) JarvisCyan else JarvisTextPrimary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            text = if (specs.isS21Ultra) "SAMSUNG GALAXY S21 ULTRA (ACTIVE)" else "HARDWARE PROFILER",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (specs.isS21Ultra) JarvisCyan else JarvisTextPrimary
+                        )
+                    }
+
+                    Text(
+                        text = if (specs.isS21Ultra) "OPTIMIZED" else "DETECTED",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = JarvisEmerald,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(JarvisEmerald.copy(alpha = 0.15f))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(JarvisSurfaceVariant.copy(alpha = 0.4f))
+                        .padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    SpecRow(label = "DEVICE MODEL", value = "${specs.manufacturer} ${specs.model}")
+                    SpecRow(label = "OS PLATFORM", value = specs.androidVersion)
+                    SpecRow(label = "MEMORY (RAM)", value = "${specs.availableRamMb} MB Free / ${specs.totalRamMb} MB Total")
+                    SpecRow(label = "AUDIO ROUTING", value = specs.activeAudioOutput)
+                    SpecRow(label = "DISPLAY PROFILE", value = specs.displaySummary)
+                    SpecRow(
+                        label = "ONE UI BATTERY RESTRICTION",
+                        value = if (specs.isBatteryOptimizationIgnored) "UNRESTRICTED (PERFECT)" else "RESTRICTED (APP MAY SLEEP)",
+                        valueColor = if (specs.isBatteryOptimizationIgnored) JarvisEmerald else JarvisAmber
+                    )
+                }
+
+                if (!specs.isBatteryOptimizationIgnored) {
+                    Button(
+                        onClick = onRequestBatteryOptimization,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = JarvisAmber.copy(alpha = 0.2f),
+                            contentColor = JarvisAmber
+                        ),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.BatteryAlert,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Exempt from Samsung Battery Saver (Wake Word Protection)",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+        }
+
+        // ==========================================
+        // 1. RUSSIAN TTS ENGINE & VOICE DIAGNOSTICS (PHYSICAL DEVICE FIX)
         // ==========================================
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(10.dp))
+                .clip(RoundedCornerShape(12.dp))
                 .background(JarvisSurface)
-                .border(1.dp, JarvisCyan.copy(alpha = 0.4f), RoundedCornerShape(10.dp))
+                .border(
+                    1.dp,
+                    if (ttsDiagnosticState.isRussianSupported) JarvisBorder else JarvisAmber.copy(alpha = 0.6f),
+                    RoundedCornerShape(12.dp)
+                )
                 .padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
@@ -148,29 +278,240 @@ fun SettingsScreen(
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.weight(1f)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.RecordVoiceOver,
+                        contentDescription = null,
+                        tint = JarvisCyan,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                        text = "RUSSIAN TTS ENGINE DIAGNOSTICS",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = JarvisCyan
+                    )
+                }
+
+                Text(
+                    text = ttsDiagnosticState.statusSummary,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (ttsDiagnosticState.isRussianSupported) JarvisEmerald else JarvisAmber,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(if (ttsDiagnosticState.isRussianSupported) JarvisEmerald.copy(alpha = 0.15f) else JarvisAmber.copy(alpha = 0.15f))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                )
+            }
+
+            // Diagnostic Info Card
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(JarvisSurfaceVariant.copy(alpha = 0.5f))
+                    .padding(10.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                SpecRow(label = "ACTIVE TTS ENGINE", value = ttsDiagnosticState.activeEngineName)
+                SpecRow(label = "PACKAGE", value = ttsDiagnosticState.activeEnginePackage.ifBlank { "system default" })
+                SpecRow(
+                    label = "RUSSIAN VOICE SUPPORT",
+                    value = ttsDiagnosticState.russianSupportStatus.label,
+                    valueColor = if (ttsDiagnosticState.isRussianSupported) JarvisEmerald else JarvisAmber
+                )
+                SpecRow(label = "ACTIVE VOICE", value = ttsDiagnosticState.activeVoiceName)
+                SpecRow(label = "TARGET LOCALE", value = ttsDiagnosticState.activeLocale)
+            }
+
+            if (!ttsDiagnosticState.isRussianSupported) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(JarvisAmber.copy(alpha = 0.15f))
+                        .border(1.dp, JarvisAmber.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                        .padding(10.dp)
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(Icons.Default.Warning, contentDescription = null, tint = JarvisAmber, modifier = Modifier.size(16.dp))
+                            Text(
+                                text = "Russian Voice Data Missing in Current Engine",
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = JarvisAmber
+                            )
+                        }
+                        Text(
+                            text = ttsDiagnosticState.diagnosticMessage,
+                            fontSize = 11.sp,
+                            color = JarvisTextPrimary
+                        )
+                        Button(
+                            onClick = onOpenTtsSettings,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(containerColor = JarvisAmber, contentColor = Color.Black),
+                            shape = RoundedCornerShape(6.dp)
+                        ) {
+                            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Open TTS Settings / Install Russian Voice", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+
+            // Engine Selector
+            Text(
+                text = "SELECT SYNTHESIS ENGINE",
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                color = JarvisTextSecondary
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                listOf(
+                    TtsEnginePreference.AUTO_BEST,
+                    TtsEnginePreference.GOOGLE_TTS,
+                    TtsEnginePreference.SAMSUNG_TTS
+                ).forEach { pref ->
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(JarvisSurfaceVariant)
+                            .border(1.dp, JarvisBorder, RoundedCornerShape(6.dp))
+                            .clickable { onSelectTtsEngine(pref) }
+                            .padding(vertical = 8.dp, horizontal = 4.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = pref.label.split(" ").first(),
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = JarvisTextPrimary
+                        )
+                    }
+                }
+            }
+
+            // Language Mode Selector
+            Text(
+                text = "LANGUAGE ROUTING MODE",
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                color = JarvisTextSecondary
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                listOf(
+                    TtsLanguagePreference.AUTO_DETECT,
+                    TtsLanguagePreference.FORCE_RUSSIAN,
+                    TtsLanguagePreference.FORCE_ENGLISH
+                ).forEach { langPref ->
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(JarvisSurfaceVariant)
+                            .border(1.dp, JarvisBorder, RoundedCornerShape(6.dp))
+                            .clickable { onSelectTtsLanguage(langPref) }
+                            .padding(vertical = 8.dp, horizontal = 4.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = when (langPref) {
+                                TtsLanguagePreference.AUTO_DETECT -> "Auto (RU/EN/UZ)"
+                                TtsLanguagePreference.FORCE_RUSSIAN -> "Force RU"
+                                TtsLanguagePreference.FORCE_ENGLISH -> "Force EN"
+                                else -> "Custom"
+                            },
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = JarvisTextPrimary
+                        )
+                    }
+                }
+            }
+
+            // Test Russian Voice Action Button
+            Button(
+                onClick = onTestRussianVoice,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = JarvisCyan, contentColor = Color.Black),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "Тест русской озвучки J.A.R.V.I.S.",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+
+        // ==========================================
+        // 2. CONNECTION & MULTI-AI DIAGNOSTICS TEST
+        // ==========================================
+        com.example.presentation.components.ConnectionDiagnosticsCard(
+            report = diagnosticReport,
+            isRunning = isRunningDiagnostics,
+            onRunDiagnostics = onRunDiagnostics
+        )
+
+        // ==========================================
+        // 3. "HEY JARVIS" WAKE WORD SYSTEM
+        // ==========================================
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(JarvisSurface)
+                .border(1.dp, JarvisBorder, RoundedCornerShape(12.dp))
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Default.Hearing,
                         contentDescription = null,
                         tint = JarvisCyan,
-                        modifier = Modifier.size(22.dp)
+                        modifier = Modifier.size(18.dp)
                     )
-                    Column {
-                        Text(
-                            text = "\"HEY JARVIS\" WAKE WORD",
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = JarvisCyan
-                        )
-                        Text(
-                            text = "Always-on local phrase trigger",
-                            fontSize = 10.sp,
-                            color = JarvisTextSecondary
-                        )
-                    }
+                    Text(
+                        text = "VOICE WAKE WORD ENGINE",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = JarvisCyan
+                    )
                 }
 
                 Switch(
@@ -183,106 +524,101 @@ fun SettingsScreen(
                 )
             }
 
-            // Status row
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(JarvisSurfaceVariant)
-                    .padding(8.dp),
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "DETECTOR STATUS:",
+                    text = "STATUS: ${wakeWordState.name}",
                     fontFamily = FontFamily.Monospace,
-                    fontSize = 10.sp,
-                    color = JarvisTextMuted
+                    fontSize = 11.sp,
+                    color = when (wakeWordState) {
+                        WakeWordState.ACTIVE -> JarvisEmerald
+                        WakeWordState.DETECTED -> JarvisCyan
+                        WakeWordState.PAUSED -> JarvisAmber
+                        WakeWordState.DISABLED -> JarvisTextMuted
+                    },
+                    fontWeight = FontWeight.Bold
                 )
-
-                val stateColor = when (wakeWordState) {
-                    WakeWordState.ACTIVE -> JarvisEmerald
-                    WakeWordState.DETECTED -> JarvisCyan
-                    WakeWordState.PAUSED -> JarvisAmber
-                    WakeWordState.DISABLED -> JarvisTextMuted
-                }
 
                 Text(
-                    text = wakeWordState.label,
+                    text = "TRIGGERS: \"Джарвис\", \"Hey Jarvis\", \"Слушай\"",
                     fontFamily = FontFamily.Monospace,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = stateColor
+                    fontSize = 9.sp,
+                    color = JarvisTextMuted
                 )
             }
-
-            Text(
-                text = "Supported wake phrases: \"Hey JARVIS\", \"Jarvis\", \"Хей Джарвис\", \"Джарвис\".\nOperates locally on device without sending background audio to external servers.",
-                fontSize = 10.sp,
-                color = JarvisTextSecondary,
-                lineHeight = 14.sp
-            )
         }
 
         // ==========================================
-        // 2. MULTI-AI ENGINE SELECTOR
+        // 4. MULTI-AI PROVIDER & ROUTING
         // ==========================================
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(10.dp))
+                .clip(RoundedCornerShape(12.dp))
                 .background(JarvisSurface)
-                .border(1.dp, JarvisBorder, RoundedCornerShape(10.dp))
+                .border(1.dp, JarvisBorder, RoundedCornerShape(12.dp))
                 .padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    imageVector = Icons.Default.Psychology,
-                    contentDescription = null,
-                    tint = JarvisCyan,
-                    modifier = Modifier.size(20.dp)
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Psychology,
+                        contentDescription = null,
+                        tint = JarvisCyan,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                        text = "PRIMARY AI PROVIDER",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = JarvisCyan
+                    )
+                }
+
                 Text(
-                    text = "AI ENGINE & MULTI-MODEL ROUTER",
+                    text = "ACTIVE: ${activeProviderType.displayName}",
                     fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
+                    fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
-                    color = JarvisCyan
+                    color = JarvisCyanGlow
                 )
             }
 
-            // Engine Selector Tabs
-            androidx.compose.foundation.lazy.LazyRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                items(AIProviderType.values().toList()) { provider ->
+            // Provider Selector Chips
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(AIProviderType.entries) { provider ->
                     val isSelected = activeProviderType == provider
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(8.dp))
                             .background(if (isSelected) JarvisCyan else JarvisSurfaceVariant)
-                            .border(1.dp, if (isSelected) JarvisCyan else JarvisBorder, RoundedCornerShape(8.dp))
                             .clickable { onSelectProvider(provider) }
-                            .padding(horizontal = 14.dp, vertical = 8.dp),
-                        contentAlignment = Alignment.Center
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
                     ) {
                         Text(
                             text = provider.displayName,
                             fontFamily = FontFamily.Monospace,
                             fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
                             color = if (isSelected) Color.Black else JarvisTextPrimary
                         )
                     }
                 }
             }
 
-            // AUTO Fallback Switch
+            // Auto-Fallback Switch
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -292,32 +628,25 @@ fun SettingsScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Route,
-                        contentDescription = null,
-                        tint = JarvisCyan,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Column {
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(imageVector = Icons.Default.Route, contentDescription = null, tint = JarvisCyan, modifier = Modifier.size(16.dp))
                         Text(
-                            text = "Auto Failover Protection",
+                            text = "Auto Fallback Routing",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             color = JarvisTextPrimary
                         )
-                        Text(
-                            text = "Failover: Gemini → Groq → OpenRouter → Grok on 429/503/timeout",
-                            fontSize = 10.sp,
-                            color = JarvisTextSecondary
-                        )
                     }
+                    Text(
+                        text = "Auto switches between providers if rate limited (HTTP 429) or offline.",
+                        fontSize = 10.sp,
+                        color = JarvisTextSecondary
+                    )
                 }
-
                 Switch(
                     checked = isAutoFallbackEnabled,
                     onCheckedChange = onToggleAutoFallback,
@@ -328,112 +657,49 @@ fun SettingsScreen(
                 )
             }
 
-            // Model Selection for Active Engine
-            val currentEngineForModels = if (activeProviderType == AIProviderType.AUTO) AIProviderType.GEMINI else activeProviderType
-            val models = availableModels[currentEngineForModels] ?: emptyList()
-            val currentSelectedModelId = selectedModels[currentEngineForModels] ?: models.firstOrNull()?.id ?: ""
+            // Active Provider Model Selector
+            if (activeProviderType != AIProviderType.AUTO) {
+                val modelsForProvider = availableModels[activeProviderType] ?: emptyList()
+                val currentSelectedModel = selectedModels[activeProviderType] ?: ""
 
-            Text(
-                text = "AVAILABLE MODELS (${currentEngineForModels.displayName}):",
-                fontFamily = FontFamily.Monospace,
-                fontSize = 10.sp,
-                color = JarvisTextMuted
-            )
+                Text(
+                    text = "SELECT MODEL FOR ${activeProviderType.displayName}:",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = JarvisTextSecondary
+                )
 
-            for (model in models) {
-                val isModelSelected = model.id == currentSelectedModelId
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(if (isModelSelected) JarvisSurfaceVariant else Color.Transparent)
-                        .border(
-                            1.dp,
-                            if (isModelSelected) JarvisCyan else JarvisBorder,
-                            RoundedCornerShape(8.dp)
-                        )
-                        .clickable { onSelectModel(currentEngineForModels, model.id) }
-                        .padding(10.dp),
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    for (modelInfo in modelsForProvider) {
+                        val isChosen = currentSelectedModel == modelInfo.id
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(if (isChosen) JarvisCyan.copy(alpha = 0.2f) else JarvisSurfaceVariant)
+                                .border(1.dp, if (isChosen) JarvisCyan else JarvisBorder, RoundedCornerShape(6.dp))
+                                .clickable { onSelectModel(activeProviderType, modelInfo.id) }
+                                .padding(horizontal = 8.dp, vertical = 6.dp)
                         ) {
-                            Text(
-                                text = model.name,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = JarvisTextPrimary
-                            )
-                            if (model.isRecommended) {
+                            Column {
                                 Text(
-                                    text = "RECOMMENDED",
+                                    text = modelInfo.name,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 10.sp,
+                                    fontWeight = if (isChosen) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (isChosen) JarvisCyan else JarvisTextPrimary
+                                )
+                                Text(
+                                    text = modelInfo.contextWindow,
                                     fontFamily = FontFamily.Monospace,
                                     fontSize = 8.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = JarvisEmerald,
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(3.dp))
-                                        .background(JarvisEmerald.copy(alpha = 0.15f))
-                                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                                    color = JarvisTextMuted
                                 )
                             }
-                        }
-
-                        if (isModelSelected) {
-                            Icon(
-                                imageVector = Icons.Default.CheckCircle,
-                                contentDescription = null,
-                                tint = JarvisCyan,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
-                    }
-
-                    Text(
-                        text = "ID: ${model.id} • Context: ${model.contextWindow}",
-                        fontSize = 10.sp,
-                        fontFamily = FontFamily.Monospace,
-                        color = JarvisTextMuted
-                    )
-
-                    if (model.description.isNotBlank()) {
-                        Text(
-                            text = model.description,
-                            fontSize = 10.sp,
-                            color = JarvisTextSecondary
-                        )
-                    }
-
-                    // Capability Badges
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        for (cap in model.capabilities) {
-                            val badgeColor = when (cap) {
-                                AICapability.REALTIME_AUDIO -> JarvisCyan
-                                AICapability.TOOL_CALLING -> JarvisEmerald
-                                AICapability.VISION -> JarvisAmber
-                                AICapability.STREAMING, AICapability.TEXT -> JarvisTextSecondary
-                            }
-                            Text(
-                                text = cap.label.uppercase(),
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 8.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = badgeColor,
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(3.dp))
-                                    .background(badgeColor.copy(alpha = 0.12f))
-                                    .padding(horizontal = 4.dp, vertical = 2.dp)
-                            )
                         }
                     }
                 }
@@ -441,14 +707,14 @@ fun SettingsScreen(
         }
 
         // ==========================================
-        // 3. SECURE API KEYS & CREDENTIALS
+        // 5. SECURE API KEYS CONFIGURATION
         // ==========================================
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(10.dp))
+                .clip(RoundedCornerShape(12.dp))
                 .background(JarvisSurface)
-                .border(1.dp, JarvisBorder, RoundedCornerShape(10.dp))
+                .border(1.dp, JarvisBorder, RoundedCornerShape(12.dp))
                 .padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
@@ -460,10 +726,10 @@ fun SettingsScreen(
                     imageVector = Icons.Default.Key,
                     contentDescription = null,
                     tint = JarvisCyan,
-                    modifier = Modifier.size(20.dp)
+                    modifier = Modifier.size(18.dp)
                 )
                 Text(
-                    text = "API CREDENTIALS & SECRETS VAULT",
+                    text = "SECURE API KEYS (LOCAL STORE)",
                     fontFamily = FontFamily.Monospace,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
@@ -471,56 +737,52 @@ fun SettingsScreen(
                 )
             }
 
-            // Gemini Key
             ApiKeyStatusRow(
-                title = "Google Gemini API Key",
-                isConfigured = SecretProvider.isGeminiConfigured,
+                title = "Gemini API Key (Server / Local)",
+                isConfigured = SecretProvider.isApiKeyConfigured,
                 onEdit = {
-                    apiKeyDialogProvider = AIProviderType.GEMINI
                     tempKeyInput = ""
+                    apiKeyDialogProvider = AIProviderType.GEMINI
                 }
             )
 
-            // Groq Key
             ApiKeyStatusRow(
-                title = "Groq API Key",
+                title = "Groq API Key (Ultra-Fast)",
                 isConfigured = SecretProvider.isGroqConfigured,
                 onEdit = {
-                    apiKeyDialogProvider = AIProviderType.GROQ
                     tempKeyInput = ""
+                    apiKeyDialogProvider = AIProviderType.GROQ
                 }
             )
 
-            // OpenRouter Key
             ApiKeyStatusRow(
-                title = "OpenRouter API Key",
+                title = "OpenRouter API Key (Multi-LLM)",
                 isConfigured = SecretProvider.isOpenRouterConfigured,
                 onEdit = {
-                    apiKeyDialogProvider = AIProviderType.OPENROUTER
                     tempKeyInput = ""
+                    apiKeyDialogProvider = AIProviderType.OPENROUTER
                 }
             )
 
-            // Grok / xAI Key
             ApiKeyStatusRow(
-                title = "xAI Grok API Key",
+                title = "xAI / Grok API Key",
                 isConfigured = SecretProvider.isXaiConfigured,
                 onEdit = {
-                    apiKeyDialogProvider = AIProviderType.GROK
                     tempKeyInput = ""
+                    apiKeyDialogProvider = AIProviderType.GROK
                 }
             )
         }
 
         // ==========================================
-        // 4. TTS & SPEECH SYNTHESIS
+        // 6. CLOUD TTS VOICE PERSONA
         // ==========================================
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(10.dp))
+                .clip(RoundedCornerShape(12.dp))
                 .background(JarvisSurface)
-                .border(1.dp, JarvisBorder, RoundedCornerShape(10.dp))
+                .border(1.dp, JarvisBorder, RoundedCornerShape(12.dp))
                 .padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
@@ -532,10 +794,10 @@ fun SettingsScreen(
                     imageVector = Icons.Default.VolumeUp,
                     contentDescription = null,
                     tint = JarvisCyan,
-                    modifier = Modifier.size(20.dp)
+                    modifier = Modifier.size(18.dp)
                 )
                 Text(
-                    text = "TTS VOICE PERSONA",
+                    text = "GEMINI CLOUD VOICE PRESET",
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
@@ -547,7 +809,7 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                for (voice in voices) {
+                for (voice in cloudVoices) {
                     val isChosen = config.ttsVoiceName == voice
                     Box(
                         modifier = Modifier
@@ -571,7 +833,7 @@ fun SettingsScreen(
         }
 
         // ==========================================
-        // 5. CONTINUOUS CONVERSATION MODE
+        // 7. CONTINUOUS CONVERSATION MODE
         // ==========================================
         Row(
             modifier = Modifier
@@ -615,7 +877,7 @@ fun SettingsScreen(
         }
 
         // ==========================================
-        // 6. DATA PURGE & RESET
+        // 8. DATA PURGE & RESET
         // ==========================================
         Column(
             modifier = Modifier
@@ -719,6 +981,33 @@ fun SettingsScreen(
             },
             containerColor = JarvisSurface,
             shape = RoundedCornerShape(12.dp)
+        )
+    }
+}
+
+@Composable
+private fun SpecRow(
+    label: String,
+    value: String,
+    valueColor: Color = JarvisTextPrimary
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 10.sp,
+            color = JarvisTextMuted
+        )
+        Text(
+            text = value,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            color = valueColor
         )
     }
 }

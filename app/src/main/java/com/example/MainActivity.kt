@@ -134,11 +134,20 @@ fun JarvisApp(viewModel: MainViewModel) {
     val isListening by viewModel.isListening.collectAsStateWithLifecycle()
     val partialVoiceText by viewModel.partialVoiceText.collectAsStateWithLifecycle()
 
+    val chatSessions by viewModel.filteredChatSessions.collectAsStateWithLifecycle()
+    val activeSessionId by viewModel.activeSessionId.collectAsStateWithLifecycle()
+    val currentSessionMessages by viewModel.currentSessionMessages.collectAsStateWithLifecycle()
+    val searchChatQuery by viewModel.searchChatQuery.collectAsStateWithLifecycle()
+
     val conversations by viewModel.conversations.collectAsStateWithLifecycle()
     val memories by viewModel.memories.collectAsStateWithLifecycle()
     val actionLogs by viewModel.actionLogs.collectAsStateWithLifecycle()
     val permissionItems by viewModel.permissionItems.collectAsStateWithLifecycle()
     val config by viewModel.config.collectAsStateWithLifecycle()
+    val diagnosticReport by viewModel.diagnosticReport.collectAsStateWithLifecycle()
+    val isRunningDiagnostics by viewModel.isRunningDiagnostics.collectAsStateWithLifecycle()
+    val ttsDiagnosticState by viewModel.ttsDiagnosticState.collectAsStateWithLifecycle()
+    val samsungSpecs by viewModel.samsungDeviceSpecs.collectAsStateWithLifecycle()
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
@@ -269,15 +278,27 @@ fun JarvisApp(viewModel: MainViewModel) {
                             selectedModels = selectedModels,
                             isAutoFallbackEnabled = isAutoFallbackEnabled,
                             availableModels = availableModels,
+                            ttsDiagnosticState = ttsDiagnosticState,
+                            samsungSpecs = samsungSpecs,
                             wakeWordState = wakeWordState,
                             isWakeWordEnabled = isWakeWordEnabled,
                             isConversationMode = isConversationMode,
+                            diagnosticReport = diagnosticReport,
+                            isRunningDiagnostics = isRunningDiagnostics,
+                            onRunDiagnostics = { viewModel.runConnectionDiagnostics() },
+                            onSelectTtsEngine = { viewModel.setTtsEnginePreference(it) },
+                            onSelectTtsLanguage = { viewModel.setTtsLanguagePreference(it) },
+                            onSelectTtsVoice = { viewModel.setTtsVoice(it) },
+                            onTestRussianVoice = { viewModel.testRussianVoice() },
+                            onOpenTtsSettings = { viewModel.openTtsSettings() },
+                            onRequestBatteryOptimization = { viewModel.requestIgnoreBatteryOptimization() },
                             onSelectProvider = { viewModel.setAIProvider(it) },
                             onSelectModel = { prov, modelId -> viewModel.setSelectedModel(prov, modelId) },
                             onToggleAutoFallback = { viewModel.setAutoFallback(it) },
                             onToggleWakeWord = { viewModel.setWakeWordEnabled(it) },
                             onSaveGroqApiKey = { viewModel.saveGroqApiKey(it) },
                             onSaveOpenRouterApiKey = { viewModel.saveOpenRouterApiKey(it) },
+                            onSaveGrokApiKey = { viewModel.saveGrokApiKey(it) },
                             onSaveGeminiApiKey = { viewModel.saveGeminiApiKey(it) },
                             onUpdateConfig = { viewModel.updateConfig(it) },
                             onToggleConversationMode = { viewModel.toggleConversationMode(it) },
@@ -310,7 +331,17 @@ fun JarvisApp(viewModel: MainViewModel) {
                     }
                     JarvisNavTab.CHAT.name -> {
                         ConversationScreen(
-                            conversations = conversations,
+                            sessions = chatSessions,
+                            activeSessionId = activeSessionId,
+                            messages = currentSessionMessages,
+                            searchQuery = searchChatQuery,
+                            activeProviderType = activeProviderType,
+                            onSelectProvider = { viewModel.setAIProvider(it) },
+                            onSelectSession = { viewModel.selectChatSession(it) },
+                            onCreateNewChat = { viewModel.createNewChat() },
+                            onRenameSession = { id, title -> viewModel.renameChatSession(id, title) },
+                            onDeleteSession = { viewModel.deleteChatSession(it) },
+                            onSearchQueryChange = { viewModel.setSearchChatQuery(it) },
                             onSendMessage = { msg, isHigh -> viewModel.sendCommand(msg, isHigh) },
                             onSpeakText = { txt -> viewModel.speakText(txt) },
                             onClearHistory = { viewModel.clearConversations() }

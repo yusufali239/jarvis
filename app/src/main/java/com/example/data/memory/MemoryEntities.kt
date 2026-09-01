@@ -48,7 +48,9 @@ data class ChatSessionEntity(
     val model: String = "gemini-2.5-flash",
     val messageCount: Int = 0,
     val isLiveSession: Boolean = false
-)
+) {
+    val sessionId: String get() = id
+}
 
 /**
  * Individual chat message associated with a ChatSessionEntity.
@@ -66,6 +68,7 @@ data class ChatMessageEntity(
     val audioAvailable: Boolean = false,
     val toolCall: String? = null,
     val thinkingContent: String? = null,
-    val metadata: String? = null
+    val metadata: String? = null,
+    val provider: String? = null
 )
 

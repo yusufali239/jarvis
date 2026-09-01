@@ -127,7 +127,7 @@ class JarvisApplication : Application() {
 
         // Wake word trigger -> Starts voice listening / Live Conversation
         jarvisCore.onWakeWordActivated = {
-            ttsManager.speak("Yes, sir?") {
+            ttsManager.speak("Слушаю вас, сэр.") {
                 jarvisCore.startListening()
             }
         }

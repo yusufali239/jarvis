@@ -1,11 +1,17 @@
 package com.example.presentation
 
 import android.app.Application
+import android.content.Intent
 import android.graphics.Bitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.JarvisApplication
+import com.example.android.system.SamsungDeviceProfiler
+import com.example.android.system.SamsungDeviceSpecs
 import com.example.core.ai.GeminiConfig
+import com.example.core.ai.TtsDiagnosticState
+import com.example.core.ai.TtsEnginePreference
+import com.example.core.ai.TtsLanguagePreference
 import com.example.core.ai.provider.AIModelInfo
 import com.example.core.ai.provider.AIProviderType
 import com.example.core.audio.wakeword.WakeWordState
@@ -18,10 +24,13 @@ import com.example.domain.agent.JarvisState
 import com.example.domain.agent.LiveSessionState
 import com.example.domain.agent.PendingConfirmation
 import com.example.domain.agent.SystemStatus
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -44,6 +53,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _availableModels = MutableStateFlow<Map<AIProviderType, List<AIModelInfo>>>(emptyMap())
     val availableModels: StateFlow<Map<AIProviderType, List<AIModelInfo>>> = _availableModels.asStateFlow()
+
+    // TTS & Russian Voice Diagnostics
+    val ttsDiagnosticState: StateFlow<TtsDiagnosticState> = app.ttsManager.diagnosticState
+
+    // Samsung S21 Ultra & Device Profiler State
+    private val _samsungDeviceSpecs = MutableStateFlow(SamsungDeviceProfiler.getDeviceSpecs(app))
+    val samsungDeviceSpecs: StateFlow<SamsungDeviceSpecs> = _samsungDeviceSpecs.asStateFlow()
 
     // Wake Word States
     val wakeWordState: StateFlow<WakeWordState> = app.wakeWordDetector.state
@@ -72,12 +88,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val searchChatQuery: StateFlow<String> = _searchChatQuery.asStateFlow()
 
     val filteredChatSessions: StateFlow<List<com.example.data.memory.ChatSessionEntity>> =
-        kotlinx.coroutines.flow.combine(app.memoryManager.allChatSessions, _searchChatQuery) { list, q ->
+        combine(app.memoryManager.allChatSessions, _searchChatQuery) { list, q ->
             if (q.isBlank()) list else list.filter { it.title.contains(q, ignoreCase = true) || it.provider.contains(q, ignoreCase = true) }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    @OptIn(ExperimentalCoroutinesApi::class)
     val currentSessionMessages: StateFlow<List<com.example.data.memory.ChatMessageEntity>> =
-        _activeSessionId.kotlinx.coroutines.flow.flatMapLatest { sId ->
+        _activeSessionId.flatMapLatest { sId ->
             app.memoryManager.getMessagesForSession(sId)
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -96,15 +113,78 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _config = MutableStateFlow(app.geminiClient.getConfig())
     val config: StateFlow<GeminiConfig> = _config.asStateFlow()
 
+    // Connection Diagnostics
+    private val _diagnosticReport = MutableStateFlow<com.example.core.network.FullDiagnosticsReport?>(null)
+    val diagnosticReport: StateFlow<com.example.core.network.FullDiagnosticsReport?> = _diagnosticReport.asStateFlow()
+
+    private val _isRunningDiagnostics = MutableStateFlow(false)
+    val isRunningDiagnostics: StateFlow<Boolean> = _isRunningDiagnostics.asStateFlow()
+
     init {
         refreshPermissions()
+        refreshDeviceSpecs()
         loadAvailableModels()
+        runConnectionDiagnostics()
+    }
+
+    fun refreshDeviceSpecs() {
+        _samsungDeviceSpecs.value = SamsungDeviceProfiler.getDeviceSpecs(app)
+    }
+
+    fun runConnectionDiagnostics() {
+        viewModelScope.launch {
+            _isRunningDiagnostics.value = true
+            try {
+                _diagnosticReport.value = com.example.core.network.ConnectionDiagnostics.runFullDiagnostics(app.applicationContext)
+            } finally {
+                _isRunningDiagnostics.value = false
+            }
+        }
     }
 
     private fun loadAvailableModels() {
         viewModelScope.launch {
             _availableModels.value = app.aiModelRouter.getAllAvailableModels()
         }
+    }
+
+    // TTS Engine & Voice Management
+    fun setTtsEnginePreference(preference: TtsEnginePreference) {
+        app.ttsManager.setEnginePreference(preference)
+    }
+
+    fun setTtsLanguagePreference(preference: TtsLanguagePreference) {
+        app.ttsManager.setLanguagePreference(preference)
+    }
+
+    fun setTtsVoice(voiceName: String?) {
+        app.ttsManager.setSelectedVoice(voiceName)
+    }
+
+    fun testRussianVoice() {
+        app.ttsManager.speak(
+            text = "Здравствуйте! Модуль синтеза речи J.A.R.V.I.S. на русском языке успешно проверен на вашем устройстве.",
+            preferGeminiTts = false
+        )
+    }
+
+    fun openTtsSettings() {
+        try {
+            val intent = SamsungDeviceProfiler.createTtsSettingsIntent()
+            app.startActivity(intent)
+        } catch (e: Exception) {
+            try {
+                val installIntent = SamsungDeviceProfiler.createInstallTtsVoiceDataIntent()
+                app.startActivity(installIntent)
+            } catch (_: Exception) {}
+        }
+    }
+
+    fun requestIgnoreBatteryOptimization() {
+        try {
+            val intent = SamsungDeviceProfiler.createIgnoreBatteryOptimizationIntent(app)
+            app.startActivity(intent)
+        } catch (_: Exception) {}
     }
 
     // AI Routing Controls

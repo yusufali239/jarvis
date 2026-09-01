@@ -26,8 +26,8 @@ class AIModelRouter(
     private val _selectedModels = MutableStateFlow<Map<AIProviderType, String>>(
         mapOf(
             AIProviderType.GEMINI to "gemini-2.5-flash",
-            AIProviderType.GROQ to "llama-3.3-70b-versatile",
-            AIProviderType.OPENROUTER to "anthropic/claude-3.5-sonnet",
+            AIProviderType.GROQ to "llama-3.1-8b-instant",
+            AIProviderType.OPENROUTER to "google/gemini-2.0-flash-exp:free",
             AIProviderType.GROK to "grok-2-latest"
         )
     )
@@ -99,7 +99,7 @@ class AIModelRouter(
             val provider = getProvider(mode)
             val modelId = _selectedModels.value[mode] ?: ""
             _lastUsedEngine.value = "${provider.displayName} ($modelId)"
-            return provider.processTurn(
+            val result = provider.processTurn(
                 conversationHistory = conversationHistory,
                 modelId = modelId,
                 toolsDeclaration = toolsDeclaration,
@@ -107,15 +107,34 @@ class AIModelRouter(
                 temperature = temperature,
                 systemInstruction = systemInstruction
             )
+            return when (result) {
+                is GeminiResult.Success -> {
+                    val displayName = result.respondingProvider ?: provider.displayName
+                    _lastUsedEngine.value = displayName
+                    result.copy(respondingProvider = displayName)
+                }
+                is GeminiResult.Error -> {
+                    if (result.isRateLimit || result.statusCode == 429 || result.message.contains("429") || result.message.contains("quota", ignoreCase = true) || result.message.contains("resource exhausted", ignoreCase = true)) {
+                        GeminiResult.Error(
+                            message = "Превышен лимит запросов (HTTP 429). Включите режим AUTO или смените провайдера.",
+                            throwable = result.throwable,
+                            statusCode = 429,
+                            isRateLimit = true
+                        )
+                    } else {
+                        result
+                    }
+                }
+            }
         }
 
-        // AUTO MODE: Try Gemini -> Groq -> OpenRouter -> Grok
+        // AUTO MODE: Chain -> Gemini -> Groq -> OpenRouter -> Grok
         val geminiModel = _selectedModels.value[AIProviderType.GEMINI] ?: "gemini-2.5-flash"
-        val groqModel = _selectedModels.value[AIProviderType.GROQ] ?: "llama-3.3-70b-versatile"
-        val openRouterModel = _selectedModels.value[AIProviderType.OPENROUTER] ?: "anthropic/claude-3.5-sonnet"
+        val groqModel = _selectedModels.value[AIProviderType.GROQ] ?: "llama-3.1-8b-instant"
+        val openRouterModel = _selectedModels.value[AIProviderType.OPENROUTER] ?: "google/gemini-2.0-flash-exp:free"
         val grokModel = _selectedModels.value[AIProviderType.GROK] ?: "grok-2-latest"
 
-        // 1. Try Gemini
+        // 1. Primary: Gemini
         if (geminiProvider.isConfigured()) {
             _lastUsedEngine.value = "Gemini ($geminiModel)"
             val geminiResult = geminiProvider.processTurn(
@@ -128,19 +147,24 @@ class AIModelRouter(
             )
 
             when (geminiResult) {
-                is GeminiResult.Success -> return geminiResult
+                is GeminiResult.Success -> {
+                    _lastUsedEngine.value = "Gemini"
+                    return geminiResult.copy(respondingProvider = "Gemini", isFallback = false)
+                }
                 is GeminiResult.Error -> {
-                    if (!_isAutoFallbackEnabled.value || !isEligibleForFallback(geminiResult.message)) {
+                    if (!_isAutoFallbackEnabled.value || !isEligibleForFallback(geminiResult.message, geminiResult.statusCode, geminiResult.isRateLimit)) {
                         return geminiResult
                     }
-                    Log.w(tag, "Gemini unavailable (${geminiResult.message}). Failing over to Groq...")
+                    Log.w(tag, "Gemini unavailable (status: ${geminiResult.statusCode}, msg: ${geminiResult.message}). Failing over to Groq...")
                 }
             }
+        } else {
+            Log.d(tag, "Gemini not configured, skipping to Groq in AUTO mode.")
         }
 
-        // 2. Try Groq
+        // 2. Fallback #1: Groq
         if (groqProvider.isConfigured()) {
-            _lastUsedEngine.value = "Groq ($groqModel) [Failover]"
+            _lastUsedEngine.value = "Groq (Fallback)"
             val groqResult = groqProvider.processTurn(
                 conversationHistory = conversationHistory,
                 modelId = groqModel,
@@ -151,19 +175,24 @@ class AIModelRouter(
             )
 
             when (groqResult) {
-                is GeminiResult.Success -> return groqResult
+                is GeminiResult.Success -> {
+                    _lastUsedEngine.value = "Groq (Fallback)"
+                    return groqResult.copy(respondingProvider = "Groq (Fallback)", isFallback = true)
+                }
                 is GeminiResult.Error -> {
-                    if (!_isAutoFallbackEnabled.value || !isEligibleForFallback(groqResult.message)) {
+                    if (!_isAutoFallbackEnabled.value || !isEligibleForFallback(groqResult.message, groqResult.statusCode, groqResult.isRateLimit)) {
                         return groqResult
                     }
-                    Log.w(tag, "Groq unavailable (${groqResult.message}). Failing over to OpenRouter...")
+                    Log.w(tag, "Groq unavailable (status: ${groqResult.statusCode}, msg: ${groqResult.message}). Failing over to OpenRouter...")
                 }
             }
+        } else {
+            Log.d(tag, "Groq not configured, skipping to OpenRouter in AUTO mode.")
         }
 
-        // 3. Try OpenRouter
+        // 3. Fallback #2: OpenRouter
         if (openRouterProvider.isConfigured()) {
-            _lastUsedEngine.value = "OpenRouter ($openRouterModel) [Failover]"
+            _lastUsedEngine.value = "OpenRouter (Fallback)"
             val openRouterResult = openRouterProvider.processTurn(
                 conversationHistory = conversationHistory,
                 modelId = openRouterModel,
@@ -174,19 +203,24 @@ class AIModelRouter(
             )
 
             when (openRouterResult) {
-                is GeminiResult.Success -> return openRouterResult
+                is GeminiResult.Success -> {
+                    _lastUsedEngine.value = "OpenRouter (Fallback)"
+                    return openRouterResult.copy(respondingProvider = "OpenRouter (Fallback)", isFallback = true)
+                }
                 is GeminiResult.Error -> {
-                    if (!_isAutoFallbackEnabled.value || !isEligibleForFallback(openRouterResult.message)) {
+                    if (!_isAutoFallbackEnabled.value || !isEligibleForFallback(openRouterResult.message, openRouterResult.statusCode, openRouterResult.isRateLimit)) {
                         return openRouterResult
                     }
-                    Log.w(tag, "OpenRouter unavailable (${openRouterResult.message}). Failing over to Grok...")
+                    Log.w(tag, "OpenRouter unavailable (status: ${openRouterResult.statusCode}, msg: ${openRouterResult.message}). Failing over to Grok...")
                 }
             }
+        } else {
+            Log.d(tag, "OpenRouter not configured, skipping to Grok in AUTO mode.")
         }
 
-        // 4. Try Grok
+        // 4. Fallback #3: Grok (xAI)
         if (grokProvider.isConfigured()) {
-            _lastUsedEngine.value = "Grok ($grokModel) [Failover]"
+            _lastUsedEngine.value = "Grok (Fallback)"
             val grokResult = grokProvider.processTurn(
                 conversationHistory = conversationHistory,
                 modelId = grokModel,
@@ -197,21 +231,34 @@ class AIModelRouter(
             )
 
             when (grokResult) {
-                is GeminiResult.Success -> return grokResult
+                is GeminiResult.Success -> {
+                    _lastUsedEngine.value = "Grok (Fallback)"
+                    return grokResult.copy(respondingProvider = "Grok (Fallback)", isFallback = true)
+                }
                 is GeminiResult.Error -> {
-                    Log.e(tag, "Grok also unavailable (${grokResult.message}).")
+                    Log.e(tag, "Grok also unavailable (status: ${grokResult.statusCode}, msg: ${grokResult.message}).")
                 }
             }
+        } else {
+            Log.d(tag, "Grok not configured in AUTO chain.")
         }
 
         _lastUsedEngine.value = "ALL PROVIDERS UNAVAILABLE"
-        return GeminiResult.Error("All AI engines are temporarily unavailable. Please verify internet connection and API keys in Settings.")
+        return GeminiResult.Error("Все ИИ-провайдеры временно недоступны или превысили лимиты. Проверьте подключение к сети и настройки API ключей.")
     }
 
     /**
-     * Checks whether an error is due to quota, rate limit, timeout, service unavailable, or network issue.
+     * Checks whether an error is due to quota, rate limit, 5xx server error, timeout, service unavailable, or network issue.
      */
-    private fun isEligibleForFallback(errorMessage: String): Boolean {
+    private fun isEligibleForFallback(
+        errorMessage: String,
+        statusCode: Int? = null,
+        isRateLimit: Boolean = false
+    ): Boolean {
+        if (isRateLimit) return true
+        if (statusCode != null && (statusCode == 429 || statusCode in 500..599 || statusCode == 404 || statusCode == 408)) {
+            return true
+        }
         val lower = errorMessage.lowercase()
         return lower.contains("quota") ||
                 lower.contains("429") ||
@@ -226,6 +273,9 @@ class AIModelRouter(
                 lower.contains("not configured") ||
                 lower.contains("missing api key") ||
                 lower.contains("resource exhausted") ||
-                lower.contains("unreachable")
+                lower.contains("unreachable") ||
+                lower.contains("failed to connect") ||
+                lower.contains("sockettimeout") ||
+                lower.contains("unknownhost")
     }
 }

@@ -13,10 +13,17 @@ sealed class GeminiResult {
         val text: String?,
         val functionCalls: List<GeminiFunctionCall>,
         val thinkingText: String? = null,
-        val rawResponse: GeminiGenerateResponse? = null
+        val rawResponse: GeminiGenerateResponse? = null,
+        val respondingProvider: String? = null,
+        val isFallback: Boolean = false
     ) : GeminiResult()
 
-    data class Error(val message: String, val throwable: Throwable? = null) : GeminiResult()
+    data class Error(
+        val message: String,
+        val throwable: Throwable? = null,
+        val statusCode: Int? = null,
+        val isRateLimit: Boolean = false
+    ) : GeminiResult()
 }
 
 class GeminiClient(
@@ -75,7 +82,7 @@ class GeminiClient(
         if (image != null && contents.isNotEmpty()) {
             val lastContent = contents.last()
             val base64Image = bitmapToBase64(image)
-            val updatedParts = lastContent.parts.toMutableList().apply {
+            val updatedParts = (lastContent.parts ?: emptyList()).toMutableList().apply {
                 add(GeminiPart(inlineData = GeminiInlineData(mimeType = "image/jpeg", data = base64Image)))
             }
             contents[contents.size - 1] = lastContent.copy(parts = updatedParts)
@@ -90,45 +97,101 @@ class GeminiClient(
             )
         )
 
-        try {
-            Log.d(tag, "Sending request to $model with ${contents.size} contents...")
-            val response = GeminiNetworkProvider.apiService.generateContent(
-                model = model,
-                apiKey = apiKey,
-                request = request
-            )
+        val candidateModels = listOfNotNull(
+            model.takeIf { it.isNotBlank() },
+            "gemini-2.5-flash",
+            "gemini-2.0-flash",
+            "gemini-2.0-flash-exp",
+            "gemini-1.5-flash",
+            "gemini-1.5-pro",
+            "gemini-3.5-flash",
+            "gemini-flash-latest",
+            "gemini-3.1-pro-preview",
+            "gemini-3.1-flash-lite-preview"
+        ).distinct()
 
-            val candidate = response.candidates?.firstOrNull()
-            val parts = candidate?.content?.parts ?: emptyList()
+        var lastException: Exception? = null
 
-            val textParts = mutableListOf<String>()
-            val thinkingParts = mutableListOf<String>()
-            val functionCalls = mutableListOf<GeminiFunctionCall>()
+        for (currModel in candidateModels) {
+            try {
+                Log.d(tag, "Sending request to Gemini ($currModel) with ${contents.size} contents...")
+                val response = GeminiNetworkProvider.apiService.generateContent(
+                    model = currModel,
+                    apiKey = apiKey,
+                    request = request
+                )
 
-            for (part in parts) {
-                if (part.functionCall != null) {
-                    functionCalls.add(part.functionCall)
-                } else if (part.thought == true && part.text != null) {
-                    thinkingParts.add(part.text)
-                } else if (part.text != null) {
-                    textParts.add(part.text)
+                val candidate = response.candidates?.firstOrNull()
+                val parts = candidate?.content?.parts ?: emptyList()
+                val finishReason = candidate?.finishReason
+
+                val textParts = mutableListOf<String>()
+                val thinkingParts = mutableListOf<String>()
+                val functionCalls = mutableListOf<GeminiFunctionCall>()
+
+                for (part in parts) {
+                    if (part.functionCall != null) {
+                        functionCalls.add(part.functionCall)
+                    } else if (part.thought == true && part.text != null) {
+                        thinkingParts.add(part.text)
+                    } else if (part.text != null) {
+                        textParts.add(part.text)
+                    }
                 }
+
+                val fullText = textParts.joinToString("\n").ifBlank { null }
+                val fullThinking = thinkingParts.joinToString("\n").ifBlank { null }
+
+                if (fullText == null && functionCalls.isEmpty() && finishReason != null && finishReason != "STOP") {
+                    Log.w(tag, "Gemini candidate finished with reason: $finishReason")
+                }
+
+                Log.d(tag, "Received response from $currModel. text: $fullText, functionCalls: ${functionCalls.size}, thinking: ${fullThinking != null}")
+                return@withContext GeminiResult.Success(
+                    text = fullText,
+                    functionCalls = functionCalls,
+                    thinkingText = fullThinking,
+                    rawResponse = response,
+                    respondingProvider = "Gemini ($currModel)"
+                )
+            } catch (e: retrofit2.HttpException) {
+                lastException = e
+                val code = e.code()
+                if (code == 404) {
+                    Log.w(tag, "Model $currModel returned 404, attempting next Gemini candidate model...")
+                    continue
+                } else if (code == 429) {
+                    Log.w(tag, "Gemini API rate limit / quota exceeded (429) on model $currModel")
+                    return@withContext GeminiResult.Error(
+                        message = "Gemini API error (429): Resource exhausted / Rate limit exceeded",
+                        throwable = e,
+                        statusCode = 429,
+                        isRateLimit = true
+                    )
+                } else {
+                    Log.e(tag, "Gemini API error ($code): ${e.message()}")
+                    return@withContext GeminiResult.Error(
+                        message = "Gemini error ($code): ${e.message()}",
+                        throwable = e,
+                        statusCode = code,
+                        isRateLimit = false
+                    )
+                }
+            } catch (e: Exception) {
+                lastException = e
+                Log.e(tag, "Gemini API exception: ${e.message}", e)
+                break
             }
-
-            val fullText = textParts.joinToString("\n").ifBlank { null }
-            val fullThinking = thinkingParts.joinToString("\n").ifBlank { null }
-
-            Log.d(tag, "Received response. text: $fullText, functionCalls: ${functionCalls.size}, thinking: ${fullThinking != null}")
-            GeminiResult.Success(
-                text = fullText,
-                functionCalls = functionCalls,
-                thinkingText = fullThinking,
-                rawResponse = response
-            )
-        } catch (e: Exception) {
-            Log.e(tag, "Gemini API error: ${e.message}", e)
-            GeminiResult.Error("Gemini error: ${e.localizedMessage ?: e.message}", e)
         }
+
+        val errMsg = lastException?.let { "Gemini error: ${it.localizedMessage ?: it.message}" } ?: "Gemini returned no response"
+        val isRateLimit = errMsg.contains("429") || errMsg.contains("resource exhausted", ignoreCase = true) || errMsg.contains("quota", ignoreCase = true)
+        GeminiResult.Error(
+            message = errMsg,
+            throwable = lastException,
+            statusCode = if (isRateLimit) 429 else null,
+            isRateLimit = isRateLimit
+        )
     }
 
     /**

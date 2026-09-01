@@ -215,7 +215,7 @@ class JarvisCore(
                 }
 
                 // If conversation history doesn't end with user's current query, add it
-                if (conversationHistory.isEmpty() || conversationHistory.last().parts.firstOrNull()?.text != trimmedInput) {
+                if (conversationHistory.isEmpty() || conversationHistory.last().parts?.firstOrNull()?.text != trimmedInput) {
                     conversationHistory.add(
                         GeminiContent(
                             role = "user",
@@ -239,17 +239,22 @@ class JarvisCore(
 
                         if (result.functionCalls.isNotEmpty()) {
                             // Execute tool calls
-                            handleFunctionCalls(result.functionCalls, conversationHistory)
+                            handleFunctionCalls(result.functionCalls, conversationHistory, result.respondingProvider)
                         } else {
                             // Direct Textual Response
-                            val responseText = result.text ?: "I am ready for your next instruction."
-                            deliverResponse(responseText)
+                            val responseText = result.text ?: "Я готов к следующему указанию, сэр."
+                            deliverResponse(responseText, respondingProvider = result.respondingProvider)
                         }
                     }
                     is GeminiResult.Error -> {
                         _currentState.value = JarvisState.ERROR
                         _systemStatus.value = _systemStatus.value.copy(activeTaskDescription = result.message)
-                        deliverResponse("I encountered an issue: ${result.message}")
+                        val errorText = if (result.isRateLimit || result.statusCode == 429) {
+                            "Превышен лимит запросов (HTTP 429). Включите режим AUTO или смените провайдера."
+                        } else {
+                            "Возникла ошибка: ${result.message}"
+                        }
+                        deliverResponse(errorText)
                     }
                 }
             } catch (e: CancellationException) {
@@ -258,14 +263,15 @@ class JarvisCore(
                 Log.e(tag, "Error in processUserCommand: ${e.message}", e)
                 _currentState.value = JarvisState.ERROR
                 _systemStatus.value = _systemStatus.value.copy(activeTaskDescription = "Error: ${e.message}")
-                deliverResponse("An unexpected error occurred: ${e.message}")
+                deliverResponse("Произошла непредвиденная ошибка: ${e.message}")
             }
         }
     }
 
     private suspend fun handleFunctionCalls(
         functionCalls: List<GeminiFunctionCall>,
-        conversationHistory: MutableList<GeminiContent>
+        conversationHistory: MutableList<GeminiContent>,
+        respondingProvider: String? = null
     ) {
         for (call in functionCalls) {
             val toolName = call.name
@@ -287,23 +293,24 @@ class JarvisCore(
                     prompt = riskEval.promptMessage ?: "Authorize J.A.R.V.I.S. to run $toolName with arguments: $args?",
                     onConfirm = {
                         _pendingConfirmation.value = null
-                        executeSingleFunctionCallAndRespond(call, conversationHistory)
+                        executeSingleFunctionCallAndRespond(call, conversationHistory, respondingProvider)
                     },
                     onCancel = {
                         _pendingConfirmation.value = null
-                        deliverResponse("Action cancelled upon your request.")
+                        deliverResponse("Действие отменено по вашему указанию.", respondingProvider)
                     }
                 )
                 return
             } else {
-                executeSingleFunctionCallAndRespond(call, conversationHistory)
+                executeSingleFunctionCallAndRespond(call, conversationHistory, respondingProvider)
             }
         }
     }
 
     private suspend fun executeSingleFunctionCallAndRespond(
         call: GeminiFunctionCall,
-        conversationHistory: MutableList<GeminiContent>
+        conversationHistory: MutableList<GeminiContent>,
+        initialProvider: String? = null
     ) {
         _currentState.value = JarvisState.EXECUTING
         _systemStatus.value = _systemStatus.value.copy(
@@ -371,15 +378,15 @@ class JarvisCore(
         when (followUpResult) {
             is GeminiResult.Success -> {
                 val text = followUpResult.text ?: toolResult.summary
-                deliverResponse(text)
+                deliverResponse(text, respondingProvider = followUpResult.respondingProvider ?: initialProvider)
             }
             is GeminiResult.Error -> {
-                deliverResponse(toolResult.summary)
+                deliverResponse(toolResult.summary, respondingProvider = initialProvider)
             }
         }
     }
 
-    private fun deliverResponse(text: String) {
+    private fun deliverResponse(text: String, respondingProvider: String? = null) {
         scope.launch {
             _lastAssistantResponse.value = text
             _currentState.value = JarvisState.SPEAKING
@@ -388,12 +395,14 @@ class JarvisCore(
             // Save response in Memory
             val activeType = aiModelRouter.activeProviderType.value
             val activeModel = aiModelRouter.selectedModels.value[activeType] ?: "default"
+            val effectiveProviderLabel = respondingProvider ?: activeType.displayName
+
             memoryManager.saveChatMessage(
                 sessionId = memoryManager.currentActiveSessionId,
                 role = "assistant",
                 text = text,
                 thinkingContent = _latestThinkingTrace.value,
-                provider = activeType.displayName,
+                provider = effectiveProviderLabel,
                 model = activeModel
             )
 

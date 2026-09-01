@@ -136,7 +136,7 @@ class LiveConversationManager(
         reconnectAttempts = 0
         currentLiveSessionId = memoryManager.startNewSession(
             provider = "Gemini Live",
-            model = "gemini-2.5-flash-native-audio",
+            model = "gemini-2.0-flash-exp",
             isLive = true,
             title = "Live Voice Session"
         )
@@ -151,9 +151,11 @@ class LiveConversationManager(
                 status = "STARTED",
                 riskLevel = "LOW"
             )
-        }
 
-        connectToGeminiLive()
+            // Strict audio resource handover: allow local recognizer to completely release AudioRecord
+            kotlinx.coroutines.delay(200)
+            connectToGeminiLive()
+        }
     }
 
     /**
@@ -180,8 +182,6 @@ class LiveConversationManager(
         _sessionState.value = LiveSessionState.DISCONNECTED
         _liveAudioAmplitude.value = 0f
 
-        wakeWordDetector.resumeAfterExternalAudio()
-
         scope.launch {
             memoryManager.logAction(
                 actionType = "LIVE_SESSION_END",
@@ -189,6 +189,10 @@ class LiveConversationManager(
                 status = "COMPLETED",
                 riskLevel = "LOW"
             )
+
+            // Strict audio resource handover: allow Live audio track to fully tear down before restarting wake word
+            kotlinx.coroutines.delay(200)
+            wakeWordDetector.resumeAfterExternalAudio()
         }
     }
 
@@ -282,10 +286,12 @@ class LiveConversationManager(
     private suspend fun sendInitialSetup(ws: WebSocket) {
         val memoryContext = memoryManager.getFormattedMemoryContext()
         val systemPrompt = """
+SYSTEM INSTRUCTION: Вы — J.A.R.V.I.S., ваш базовый язык — русский. Все ответы должны генерироваться строго на русском языке и быть оптимизированы для естественного чтения движком TTS на русском.
+
 ${geminiClient.getConfig().systemInstruction}
 
 LIVE CONVERSATION PERSONALITY MANDATES:
-1. Speak as J.A.R.V.I.S.: calm, intellectual, confident, concise, and futuristic.
+1. Speak as J.A.R.V.I.S.: calm, intellectual, confident, concise, and futuristic in Russian.
 2. Never say filler phrases like "Of course!", "Sure!", "With pleasure!".
 3. Do not repeat the user's name or give long preambles.
 4. Natural conversation: Understand pauses, short follow-up questions ("А на Луне?", "Объясни проще", "Подожди", "Короче"), and corrections without asking to repeat context.
@@ -294,7 +300,7 @@ $memoryContext
         """.trimIndent()
 
         val setupConfig = LiveSetupConfig(
-            model = "models/gemini-2.5-flash-native-audio-preview-12-2025",
+            model = "models/gemini-2.0-flash-exp",
             generationConfig = LiveGenerationConfig(
                 responseModalities = listOf("AUDIO", "TEXT"),
                 speechConfig = GeminiSpeechConfig(
@@ -539,7 +545,7 @@ $memoryContext
                     )
                 }
 
-                if (conversationHistory.isEmpty() || conversationHistory.last().parts.firstOrNull()?.text != trimmed) {
+                if (conversationHistory.isEmpty() || conversationHistory.last().parts?.firstOrNull()?.text != trimmed) {
                     conversationHistory.add(
                         GeminiContent(role = "user", parts = listOf(GeminiPart(text = trimmed)))
                     )
